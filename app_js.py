@@ -3,8 +3,7 @@ from openai import OpenAI
 from datetime import datetime
 import tempfile
 import os
-import numpy as np
-from audiorecorder import audiorecorder
+import base64
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
@@ -89,18 +88,86 @@ with col3:
 st.divider()
 
 st.subheader("Record your observation")
-st.write("Press the microphone button to start recording. Press it again to stop.")
 
-audio = audiorecorder("🎙️ Press to Record", "⏹️ Press to Stop")
+# HTML/JS recorder component
+recorder_html = """
+<script>
+let mediaRecorder;
+let audioChunks = [];
+let isRecording = false;
 
-if len(audio) > 0:
-    st.audio(audio.export().read(), format="audio/wav")
+async function toggleRecording() {
+    const btn = document.getElementById('recordBtn');
+    const status = document.getElementById('status');
 
+    if (!isRecording) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: 'audio/webm' });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const base64 = reader.result.split(',')[1];
+                const input = document.getElementById('audioData');
+                input.value = base64;
+                const form = document.getElementById('audioForm');
+                form.requestSubmit();
+            };
+            reader.readAsDataURL(blob);
+            stream.getTracks().forEach(t => t.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        btn.innerText = '⏹️ Stop Recording';
+        btn.style.background = '#ff4b4b';
+        status.innerText = '🔴 Recording...';
+    } else {
+        mediaRecorder.stop();
+        isRecording = false;
+        btn.innerText = '🎙️ Start Recording';
+        btn.style.background = '#0068c9';
+        status.innerText = '⏳ Processing...';
+    }
+}
+</script>
+
+<form id="audioForm" method="POST">
+    <input type="hidden" id="audioData" name="audioData" />
+</form>
+
+<button id="recordBtn" onclick="toggleRecording()"
+    style="background:#0068c9; color:white; border:none; padding:14px 28px;
+    font-size:16px; border-radius:8px; cursor:pointer; margin-bottom:12px;">
+    🎙️ Start Recording
+</button>
+<p id="status" style="color:gray; font-size:14px;">Press the button to start recording.</p>
+"""
+
+st.components.v1.html(recorder_html, height=120)
+
+st.write("Or upload an audio file:")
+audio_file = st.file_uploader("Upload voice recording", type=["mp3", "mp4", "wav", "m4a", "webm"])
+
+audio_b64 = st.text_input("", key="audio_b64", label_visibility="collapsed", placeholder="audio data")
+
+if audio_file is not None or (audio_b64 and len(audio_b64) > 100):
     if st.button("Generate Note"):
         with st.spinner("Transcribing audio..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                audio.export(tmp.name, format="wav")
-                tmp_path = tmp.name
+            if audio_file is not None:
+                suffix = os.path.splitext(audio_file.name)[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(audio_file.read())
+                    tmp_path = tmp.name
+            else:
+                audio_bytes = base64.b64decode(audio_b64)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+                    tmp.write(audio_bytes)
+                    tmp_path = tmp.name
 
             transcript = transcribe_audio(tmp_path)
             os.unlink(tmp_path)
