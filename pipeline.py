@@ -1,7 +1,7 @@
 from openai import OpenAI
 from datetime import datetime
 
-client = OpenAI(api_key="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")
+client = OpenAI(api_key="")
 
 
 def transcribe_audio(file_path):
