@@ -6,6 +6,35 @@ import os
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+st.markdown("""
+<style>
+/* Make the audio input container cleaner */
+[data-testid="stAudioInput"] {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+/* Style the record button as a circle */
+[data-testid="stAudioInput"] button {
+    width: 64px !important;
+    height: 64px !important;
+    border-radius: 50% !important;
+    background: #0068c9 !important;
+    border: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 auto 16px auto !important;
+}
+
+/* Hide the waveform bar */
+[data-testid="stAudioInput"] > div > div:nth-child(2) {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 def transcribe_audio(file_path):
     with open(file_path, "rb") as audio_file:
