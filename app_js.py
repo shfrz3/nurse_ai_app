@@ -3,7 +3,8 @@ from openai import OpenAI
 from datetime import datetime
 import tempfile
 import os
-import base64
+import numpy as np
+from audiorecorder import audiorecorder
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
@@ -87,133 +88,34 @@ with col3:
 
 st.divider()
 
-st.subheader("Record or upload your observation")
+st.subheader("Record your observation")
+st.write("Press the microphone button to start recording. Press it again to stop.")
 
-# Initialize session state
-if "audio_b64" not in st.session_state:
-    st.session_state.audio_b64 = None
+audio = audiorecorder("🎙️ Press to Record", "⏹️ Press to Stop")
 
-# HTML/JS recorder that sends data back via Streamlit component
-recorder_html = """
-<div style="font-family: sans-serif;">
-    <button id="recordBtn" onclick="toggleRecording()"
-        style="background:#0068c9; color:white; border:none; padding:14px 32px;
-        font-size:16px; border-radius:8px; cursor:pointer; width:100%; margin-bottom:10px;">
-        🎙️ Start Recording
-    </button>
-    <p id="status" style="color:gray; font-size:14px; text-align:center;">
-        Press the button to start recording your observation.
-    </p>
-    <audio id="preview" controls style="width:100%; display:none; margin-top:10px;"></audio>
-</div>
+if len(audio) > 0:
+    st.audio(audio.export().read(), format="audio/wav")
 
-<script>
-let mediaRecorder;
-let audioChunks = [];
-let isRecording = false;
-
-async function toggleRecording() {
-    const btn = document.getElementById('recordBtn');
-    const status = document.getElementById('status');
-    const preview = document.getElementById('preview');
-
-    if (!isRecording) {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-
-            mediaRecorder.ondataavailable = e => {
-                if (e.data.size > 0) audioChunks.push(e.data);
-            };
-
-            mediaRecorder.onstop = () => {
-                const blob = new Blob(audioChunks, { type: 'audio/webm' });
-                
-                // Show audio preview
-                const url = URL.createObjectURL(blob);
-                preview.src = url;
-                preview.style.display = 'block';
-                
-                // Convert to base64 and send to Streamlit
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    const base64 = reader.result.split(',')[1];
-                    window.parent.postMessage({
-                        type: 'streamlit:setComponentValue',
-                        value: base64
-                    }, '*');
-                };
-                reader.readAsDataURL(blob);
-                stream.getTracks().forEach(t => t.stop());
-                status.innerText = '✅ Recording saved. Press Generate Note below.';
-            };
-
-            mediaRecorder.start(100);
-            isRecording = true;
-            btn.innerText = '⏹️ Stop Recording';
-            btn.style.background = '#ff4b4b';
-            status.innerText = '🔴 Recording... Press again to stop.';
-            preview.style.display = 'none';
-        } catch(err) {
-            status.innerText = '❌ Microphone access denied. Please allow microphone access and try again.';
-        }
-    } else {
-        mediaRecorder.stop();
-        isRecording = false;
-        btn.innerText = '🎙️ Start Recording';
-        btn.style.background = '#0068c9';
-    }
-}
-</script>
-"""
-
-audio_b64 = st.components.v1.html(recorder_html, height=160)
-
-if audio_b64:
-    st.session_state.audio_b64 = audio_b64
-
-st.write("**Or upload an audio file:**")
-audio_file = st.file_uploader("", type=["mp3", "mp4", "wav", "m4a", "webm"], label_visibility="collapsed")
-
-st.divider()
-
-has_audio = audio_file is not None or st.session_state.audio_b64 is not None
-
-if has_audio:
-    if st.button("🗒️ Generate Note", use_container_width=True):
+    if st.button("Generate Note"):
         with st.spinner("Transcribing audio..."):
-            try:
-                if audio_file is not None:
-                    suffix = os.path.splitext(audio_file.name)[1]
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                        tmp.write(audio_file.read())
-                        tmp_path = tmp.name
-                else:
-                    audio_bytes = base64.b64decode(st.session_state.audio_b64)
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-                        tmp.write(audio_bytes)
-                        tmp_path = tmp.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                audio.export(tmp.name, format="wav")
+                tmp_path = tmp.name
 
-                transcript = transcribe_audio(tmp_path)
-                os.unlink(tmp_path)
+            transcript = transcribe_audio(tmp_path)
+            os.unlink(tmp_path)
 
-                st.subheader("Transcript")
-                st.info(transcript)
+        st.subheader("Transcript")
+        st.info(transcript)
 
-                with st.spinner("Generating note..."):
-                    note = generate_note(
-                        raw_input=transcript,
-                        resident_name=resident_name,
-                        staff_name=staff_name,
-                        staff_role=staff_role
-                    )
+        with st.spinner("Generating note..."):
+            note = generate_note(
+                raw_input=transcript,
+                resident_name=resident_name,
+                staff_name=staff_name,
+                staff_role=staff_role
+            )
 
-                st.subheader("Progress Note")
-                st.text_area("", value=note, height=300)
-                st.success("✅ Note generated. Copy it and paste it into your system.")
-
-            except Exception as e:
-                st.error(f"Something went wrong: {str(e)}")
-else:
-    st.info("Record your observation or upload an audio file to get started.")
+        st.subheader("Progress Note")
+        st.text_area("", value=note, height=300)
+        st.success("Note generated. Copy it and paste it into your system.")
