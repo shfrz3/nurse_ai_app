@@ -87,10 +87,26 @@ with col3:
 
 st.divider()
 
-st.subheader("Record your observation")
+st.subheader("Record or upload your observation")
 
-# HTML/JS recorder component
+# Initialize session state
+if "audio_b64" not in st.session_state:
+    st.session_state.audio_b64 = None
+
+# HTML/JS recorder that sends data back via Streamlit component
 recorder_html = """
+<div style="font-family: sans-serif;">
+    <button id="recordBtn" onclick="toggleRecording()"
+        style="background:#0068c9; color:white; border:none; padding:14px 32px;
+        font-size:16px; border-radius:8px; cursor:pointer; width:100%; margin-bottom:10px;">
+        🎙️ Start Recording
+    </button>
+    <p id="status" style="color:gray; font-size:14px; text-align:center;">
+        Press the button to start recording your observation.
+    </p>
+    <audio id="preview" controls style="width:100%; display:none; margin-top:10px;"></audio>
+</div>
+
 <script>
 let mediaRecorder;
 let audioChunks = [];
@@ -99,90 +115,105 @@ let isRecording = false;
 async function toggleRecording() {
     const btn = document.getElementById('recordBtn');
     const status = document.getElementById('status');
+    const preview = document.getElementById('preview');
 
     if (!isRecording) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks = [];
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
 
-        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(audioChunks, { type: 'audio/webm' });
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const base64 = reader.result.split(',')[1];
-                const input = document.getElementById('audioData');
-                input.value = base64;
-                const form = document.getElementById('audioForm');
-                form.requestSubmit();
+            mediaRecorder.ondataavailable = e => {
+                if (e.data.size > 0) audioChunks.push(e.data);
             };
-            reader.readAsDataURL(blob);
-            stream.getTracks().forEach(t => t.stop());
-        };
 
-        mediaRecorder.start();
-        isRecording = true;
-        btn.innerText = '⏹️ Stop Recording';
-        btn.style.background = '#ff4b4b';
-        status.innerText = '🔴 Recording...';
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                
+                // Show audio preview
+                const url = URL.createObjectURL(blob);
+                preview.src = url;
+                preview.style.display = 'block';
+                
+                // Convert to base64 and send to Streamlit
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    const base64 = reader.result.split(',')[1];
+                    window.parent.postMessage({
+                        type: 'streamlit:setComponentValue',
+                        value: base64
+                    }, '*');
+                };
+                reader.readAsDataURL(blob);
+                stream.getTracks().forEach(t => t.stop());
+                status.innerText = '✅ Recording saved. Press Generate Note below.';
+            };
+
+            mediaRecorder.start(100);
+            isRecording = true;
+            btn.innerText = '⏹️ Stop Recording';
+            btn.style.background = '#ff4b4b';
+            status.innerText = '🔴 Recording... Press again to stop.';
+            preview.style.display = 'none';
+        } catch(err) {
+            status.innerText = '❌ Microphone access denied. Please allow microphone access and try again.';
+        }
     } else {
         mediaRecorder.stop();
         isRecording = false;
         btn.innerText = '🎙️ Start Recording';
         btn.style.background = '#0068c9';
-        status.innerText = '⏳ Processing...';
     }
 }
 </script>
-
-<form id="audioForm" method="POST">
-    <input type="hidden" id="audioData" name="audioData" />
-</form>
-
-<button id="recordBtn" onclick="toggleRecording()"
-    style="background:#0068c9; color:white; border:none; padding:14px 28px;
-    font-size:16px; border-radius:8px; cursor:pointer; margin-bottom:12px;">
-    🎙️ Start Recording
-</button>
-<p id="status" style="color:gray; font-size:14px;">Press the button to start recording.</p>
 """
 
-st.components.v1.html(recorder_html, height=120)
+audio_b64 = st.components.v1.html(recorder_html, height=160)
 
-st.write("Or upload an audio file:")
-audio_file = st.file_uploader("Upload voice recording", type=["mp3", "mp4", "wav", "m4a", "webm"])
+if audio_b64:
+    st.session_state.audio_b64 = audio_b64
 
-audio_b64 = st.text_input("", key="audio_b64", label_visibility="collapsed", placeholder="audio data")
+st.write("**Or upload an audio file:**")
+audio_file = st.file_uploader("", type=["mp3", "mp4", "wav", "m4a", "webm"], label_visibility="collapsed")
 
-if audio_file is not None or (audio_b64 and len(audio_b64) > 100):
-    if st.button("Generate Note"):
+st.divider()
+
+has_audio = audio_file is not None or st.session_state.audio_b64 is not None
+
+if has_audio:
+    if st.button("🗒️ Generate Note", use_container_width=True):
         with st.spinner("Transcribing audio..."):
-            if audio_file is not None:
-                suffix = os.path.splitext(audio_file.name)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                    tmp.write(audio_file.read())
-                    tmp_path = tmp.name
-            else:
-                audio_bytes = base64.b64decode(audio_b64)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-                    tmp.write(audio_bytes)
-                    tmp_path = tmp.name
+            try:
+                if audio_file is not None:
+                    suffix = os.path.splitext(audio_file.name)[1]
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp.write(audio_file.read())
+                        tmp_path = tmp.name
+                else:
+                    audio_bytes = base64.b64decode(st.session_state.audio_b64)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+                        tmp.write(audio_bytes)
+                        tmp_path = tmp.name
 
-            transcript = transcribe_audio(tmp_path)
-            os.unlink(tmp_path)
+                transcript = transcribe_audio(tmp_path)
+                os.unlink(tmp_path)
 
-        st.subheader("Transcript")
-        st.info(transcript)
+                st.subheader("Transcript")
+                st.info(transcript)
 
-        with st.spinner("Generating note..."):
-            note = generate_note(
-                raw_input=transcript,
-                resident_name=resident_name,
-                staff_name=staff_name,
-                staff_role=staff_role
-            )
+                with st.spinner("Generating note..."):
+                    note = generate_note(
+                        raw_input=transcript,
+                        resident_name=resident_name,
+                        staff_name=staff_name,
+                        staff_role=staff_role
+                    )
 
-        st.subheader("Progress Note")
-        st.text_area("", value=note, height=300)
-        st.success("Note generated. Copy it and paste it into your system.")
+                st.subheader("Progress Note")
+                st.text_area("", value=note, height=300)
+                st.success("✅ Note generated. Copy it and paste it into your system.")
+
+            except Exception as e:
+                st.error(f"Something went wrong: {str(e)}")
+else:
+    st.info("Record your observation or upload an audio file to get started.")
