@@ -3,7 +3,6 @@ from openai import OpenAI
 from datetime import datetime
 import tempfile
 import os
-import base64
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
@@ -87,122 +86,30 @@ with col3:
 
 st.divider()
 
-st.subheader("Record or upload your observation")
+st.subheader("Record your observation")
+st.write("Press the microphone button to record. Press stop when done.")
 
-# Initialize session state
-if "audio_b64" not in st.session_state:
-    st.session_state.audio_b64 = None
-
-# HTML/JS recorder - stores audio in a hidden text area that Streamlit can read
-recorder_html = """
-<div style="font-family: sans-serif;">
-    <button id="recordBtn" onclick="toggleRecording()"
-        style="background:#0068c9; color:white; border:none; padding:14px 32px;
-        font-size:16px; border-radius:8px; cursor:pointer; width:100%; margin-bottom:10px;">
-        🎙️ Start Recording
-    </button>
-    <p id="status" style="color:gray; font-size:14px; text-align:center;">
-        Press the button to start recording your observation.
-    </p>
-    <audio id="preview" controls style="width:100%; display:none; margin-top:10px;"></audio>
-</div>
-
-<script>
-let mediaRecorder;
-let audioChunks = [];
-let isRecording = false;
-
-async function toggleRecording() {
-    const btn = document.getElementById('recordBtn');
-    const status = document.getElementById('status');
-    const preview = document.getElementById('preview');
-
-    if (!isRecording) {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-
-            mediaRecorder.ondataavailable = e => {
-                if (e.data.size > 0) audioChunks.push(e.data);
-            };
-
-            mediaRecorder.onstop = () => {
-                const blob = new Blob(audioChunks, { type: 'audio/webm' });
-
-                // Show audio preview
-                const url = URL.createObjectURL(blob);
-                preview.src = url;
-                preview.style.display = 'block';
-
-                // Convert to base64 and write into the hidden textarea Streamlit watches
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    const base64 = reader.result.split(',')[1];
-                    // Find the hidden textarea Streamlit rendered and update it
-                    const textareas = window.parent.document.querySelectorAll('textarea');
-                    for (let ta of textareas) {
-                        if (ta.dataset.testid === 'stTextArea' || ta.placeholder === 'audio_input') {
-                            ta.value = base64;
-                            ta.dispatchEvent(new Event('input', { bubbles: true }));
-                            break;
-                        }
-                    }
-                    // Also store in sessionStorage as backup
-                    window.parent.sessionStorage.setItem('audio_b64', base64);
-                };
-                reader.readAsDataURL(blob);
-                stream.getTracks().forEach(t => t.stop());
-                status.innerText = '✅ Recording complete. Press Generate Note below.';
-            };
-
-            mediaRecorder.start(100);
-            isRecording = true;
-            btn.innerText = '⏹️ Stop Recording';
-            btn.style.background = '#ff4b4b';
-            status.innerText = '🔴 Recording... Press again to stop.';
-            preview.style.display = 'none';
-        } catch(err) {
-            status.innerText = '❌ Microphone access denied. Please allow microphone access and try again.';
-        }
-    } else {
-        mediaRecorder.stop();
-        isRecording = false;
-        btn.innerText = '🎙️ Start Recording';
-        btn.style.background = '#0068c9';
-    }
-}
-</script>
-"""
-
-st.components.v1.html(recorder_html, height=180)
-
-# Hidden text input where the JS writes the base64 audio
-audio_input = st.text_area("audio_input", value="", label_visibility="collapsed", height=1, key="audio_input", placeholder="audio_input")
-
-if audio_input and len(audio_input) > 100:
-    st.session_state.audio_b64 = audio_input
+audio = st.audio_input("Record your observation")
 
 st.write("**Or upload an audio file:**")
 audio_file = st.file_uploader("", type=["mp3", "mp4", "wav", "m4a", "webm"], label_visibility="collapsed")
 
 st.divider()
 
-has_audio = audio_file is not None or st.session_state.audio_b64 is not None
+has_audio = audio is not None or audio_file is not None
 
 if has_audio:
     if st.button("🗒️ Generate Note", use_container_width=True):
         with st.spinner("Transcribing audio..."):
             try:
-                if audio_file is not None:
+                if audio is not None:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        tmp.write(audio.read())
+                        tmp_path = tmp.name
+                else:
                     suffix = os.path.splitext(audio_file.name)[1]
                     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                         tmp.write(audio_file.read())
-                        tmp_path = tmp.name
-                else:
-                    audio_bytes = base64.b64decode(st.session_state.audio_b64)
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-                        tmp.write(audio_bytes)
                         tmp_path = tmp.name
 
                 transcript = transcribe_audio(tmp_path)
